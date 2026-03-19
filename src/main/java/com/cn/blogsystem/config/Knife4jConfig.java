@@ -2,6 +2,7 @@ package com.cn.blogsystem.config;
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.security.SecurityScheme;
 import org.springdoc.core.models.GroupedOpenApi;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,6 +12,8 @@ public class Knife4jConfig {
     @Bean
     public OpenAPI openAPI() {
         System.out.println("✅✅✅ Knife4jConfig openAPI Bean 正在加载..."); // 添加这行
+
+
 
         return new OpenAPI()
                 .info(new Info()
