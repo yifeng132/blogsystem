@@ -1,6 +1,7 @@
 package com.cn.blogsystem.service.serviceImpl;
 
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.cn.blogsystem.entity.User;
 import com.cn.blogsystem.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,7 +19,9 @@ public class DBUserDetailsService implements UserDetailsService {
     @Override
     public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
         // 1. 从数据库查询用户
-        User user = userMapper.selectByUsername(username);
+        QueryWrapper queryWrapper = new QueryWrapper<>();
+        queryWrapper.eq("username", username);
+        User user = userMapper.selectOne(queryWrapper);
         if (user == null) {
             throw new UsernameNotFoundException("用户不存在");
         }

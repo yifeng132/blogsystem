@@ -11,9 +11,6 @@ import org.springframework.context.annotation.Configuration;
 public class Knife4jConfig {
     @Bean
     public OpenAPI openAPI() {
-        System.out.println("✅✅✅ Knife4jConfig openAPI Bean 正在加载..."); // 添加这行
-
-
 
         return new OpenAPI()
                 .info(new Info()

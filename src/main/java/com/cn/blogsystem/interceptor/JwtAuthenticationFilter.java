@@ -1,6 +1,8 @@
 package com.cn.blogsystem.interceptor;
 
+import com.cn.blogsystem.common.BusinessException;
 import com.cn.blogsystem.common.JwtUtil;
+import com.cn.blogsystem.common.Result;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -28,12 +30,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     // 定义无需认证的路径白名单（可根据实际需求扩展）
     private static final List<String> WHITE_LIST = Arrays.asList(
             "/login",          // 登录接口
-            "/login.html",     // 登录页面
             "/register",       // 注册接口
             "/captcha",        // 验证码接口
             "/error",           // Spring Boot 默认的错误页面
             "/favicon.ico", // 浏览器会解析页面。为了在浏览器标签页上显示一个小图标（favicon），它会自动发起一个请求去获取 /favicon.ico
-            "/index.html",
             "/doc.html"
     );
 
@@ -49,16 +49,27 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
 
-        // 2. 如果 Token 存在且有效，则进行认证
         // 1. 获取请求头中的 Token
         String token = resolveToken(request);
 
-        // 2. 【核心逻辑】如果 Token 存在，则进行解析和认证
+        // 2.如果 Token 存在，则进行解析和认证
         if (StringUtils.hasText(token)) {
             try {
+                boolean result = jwtUtil.validateToken(token);
+                if ( result==true){
+                    // 【新增】检查黑名单
+                    if (jwtUtil.isTokenInBlacklist(token)) {
+                        // 如果在黑名单中，直接抛出异常或返回 401，阻止后续流程
+                        throw new BusinessException(401, "Token 已失效，请重新登录");
+                    }
+
+                }
+
+
+
+
                 // 从载荷中获取用户 ID
                 String userId = jwtUtil.extractUserId(token);
-
                 if (userId != null) {
                     // 构建权限列表 (当前为空，后续可扩展角色)
                     List<SimpleGrantedAuthority> authorities = Collections.emptyList();
@@ -66,6 +77,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     // 构建 Authentication 对象
                     UsernamePasswordAuthenticationToken authentication =
                             new UsernamePasswordAuthenticationToken(userId, null, authorities);
+
+                    // ✅ 【关键修改】将原始 Token 存入 details 字段，供后续业务（如登出）使用
+                    authentication.setDetails(token);
+
 
                     // 将认证对象放入 Security 上下文
                     SecurityContextHolder.getContext().setAuthentication(authentication);

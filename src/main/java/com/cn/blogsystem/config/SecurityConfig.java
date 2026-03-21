@@ -49,6 +49,7 @@ public class SecurityConfig {
         http
                 // 关闭 CSRF（测试环境简化，生产环境需开启）
                 .csrf(csrf -> csrf.disable())
+                .logout(logout -> logout.disable())
                 // 禁用表单登录
                 .formLogin(form -> form.disable())
                 // ✅ 关键：添加 JWT 过滤器，放在用户名密码过滤器之前
@@ -56,18 +57,15 @@ public class SecurityConfig {
                 // 配置接口授权规则
                 .authorizeHttpRequests(auth -> auth
                         // 公开接口：无需登录即可访问
-                        .requestMatchers( "/register","/login","/login.html","/doc.html","/webjars/**", "/v3/api-docs/**").permitAll()
+                        .requestMatchers("/register","/login","/doc.html","/webjars/**", "/v3/api-docs/**").permitAll()
                         // 2. 【关键】静态资源公开 (html, css, js, img)，因为浏览器跳转无法自动带 Token
                         // 这样用户能加载到 index.html 文件，但里面的 JS 请求数据时会被拦截验证
                         .requestMatchers("/*.html", "/js/**", "/css/**", "/images/**", "/static/**").permitAll()
                         // 其他所有接口：需要登录才能访问
                         .anyRequest().authenticated()
-                )
-                // 配置退出登录
-                .logout(logout -> logout
-                        .permitAll() // 退出接口允许匿名访问
-
                 );
+
+
         return http.build();
     }
 

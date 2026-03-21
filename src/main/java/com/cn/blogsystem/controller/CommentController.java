@@ -9,6 +9,7 @@ import com.cn.blogsystem.service.CommentService;
 import com.cn.blogsystem.vo.CommentSelectVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
@@ -34,7 +35,7 @@ public class CommentController {
     //添加评论
     @Operation(summary = "添加评论", description = "添加评论")
     @PostMapping("/add")// 建议显式加上 @PostMapping("/comments") 等路径
-    public Result<String> add(@RequestBody CommentInsertDTO comment) {
+    public Result<String> add(@RequestBody @Valid CommentInsertDTO comment) {
             commentService.add(comment);
             return Result.success("添加成功");
     }

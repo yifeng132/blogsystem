@@ -1,7 +1,6 @@
 package com.cn.blogsystem.controller;
 
 
-
 import com.cn.blogsystem.common.Result;
 import com.cn.blogsystem.common.JwtUtil;
 import com.cn.blogsystem.dto.LoginDTO;
@@ -9,9 +8,9 @@ import com.cn.blogsystem.dto.RegisterDTO;
 import com.cn.blogsystem.dto.UpdateProfileDTO;
 import com.cn.blogsystem.entity.User;
 import com.cn.blogsystem.service.UserService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.cassandra.CassandraProperties;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -19,6 +18,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 
 @RestController
@@ -37,44 +38,24 @@ public class UserController {
     @PostMapping("/login")
     @Operation(summary = "用户登录", description = "根据用户名和密码登录，返回 Token")
     public Result<String> login(@RequestBody @Valid LoginDTO loginDTO) {
-        //打印 DTO
-        System.out.println("loginDTO = " + loginDTO);
         try {
             // 1. 构建未认证的 Token 对象
             UsernamePasswordAuthenticationToken authToken =
                     new UsernamePasswordAuthenticationToken(loginDTO.getUsername(), loginDTO.getPassword());
-
             // 2. 执行认证 (核心步骤)
             // 这里会触发 Spring Security 流程：
             // -> 调用 DBUserDetailsService.loadUserByUsername 查库
             // -> 自动使用 BCrypt 比对密码
             // -> 成功则返回完整的 Authentication 对象，失败则抛异常
             Authentication authentication = authenticationManager.authenticate(authToken);
-
-            // --- ✅ 新增逻辑开始：获取 userId ---
-
-            // 3. 根据用户名查询完整用户信息 (假设 userService 有这个方法)
             // 注意：此时密码已验证通过，用户一定存在
             User user = userService.getByUsername(loginDTO.getUsername());
-
-            if (user == null) {
-                // 理论上不会发生，因为 authenticate 成功代表用户存在
-                return Result.error(500, "用户数据异常");
-            }
-
             // 4. 提取用户 ID
             String userIdStr = user.getId().toString();
-
-
             // 3. 认证成功，生成 JWT Token
             // 假设 JwtUtil 中有 createToken 方法，传入用户名
             String token = jwtUtil.generateToken(userIdStr);
-
-            // 4. (可选) 将认证信息放入上下文，虽然对于无状态 JWT 通常不需要，但在当前请求线程内可用
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-
             return Result.success(token);
-
         } catch (Exception e) {
             // 5. 认证失败处理 (用户名不存在或密码错误)
             e.printStackTrace();
@@ -131,6 +112,30 @@ public class UserController {
 
         return Result.success("修改成功");
     }
+
+
+    @PostMapping("/logout")
+    @Operation(summary = "用户登出", description = "将当前 Token 加入黑名单，使其立即失效")
+    public Result<String> logout() {
+        // 2. 从 RequestContextHolder 中获取请求对象 (Spring 推荐做法，避免直接作为参数传递)
+
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        String token = (String) authentication.getDetails();
+        try {
+            // 4. 计算 Token 剩余有效期
+            long remainingTime = jwtUtil.getRemainingExpiration(token);
+            // 5. 如果 Token 还没过期，才加入黑名单
+            if (remainingTime > 0) {
+                jwtUtil.addTokenToBlacklist(token, remainingTime);
+            }
+            return Result.success("登出成功");
+        } catch (Exception e) {
+            e.printStackTrace();
+            return Result.error("登出失败：" + e.getMessage());
+        }
+    }
+
+
 
 
 
