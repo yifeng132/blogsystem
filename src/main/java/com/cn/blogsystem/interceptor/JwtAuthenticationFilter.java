@@ -91,7 +91,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
             } catch (Exception e) {
                 System.out.println("❌ Token 解析异常：" + e.getMessage());
-                e.printStackTrace(); // 打印堆栈，方便排查 403/401 问题
                 SecurityContextHolder.clearContext();
             }
         } else {

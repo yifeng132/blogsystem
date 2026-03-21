@@ -11,6 +11,7 @@ import com.cn.blogsystem.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -20,6 +21,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import io.swagger.v3.oas.annotations.Operation;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+
+import java.util.concurrent.TimeUnit;
 
 
 @RestController
@@ -35,9 +38,23 @@ public class UserController {
     @Autowired
     private UserService userService;
 
+    @Autowired
+    private RedisTemplate<String, String> redisTemplate;
+
     @PostMapping("/login")
     @Operation(summary = "用户登录", description = "根据用户名和密码登录，返回 Token")
     public Result<String> login(@RequestBody @Valid LoginDTO loginDTO) {
+
+        String username = loginDTO.getUsername();
+        String failKey = "login:fail:" + username;
+        String lockKey = "login:lock:" + username;
+
+        // 1. 【前置拦截】检查是否已锁定 (不查库)
+        if (Boolean.TRUE.equals(redisTemplate.hasKey(lockKey))) {
+            Long ttl = redisTemplate.getExpire(lockKey);
+            return Result.error(403, "账户已锁定，请 " + ttl + " 秒后再试");
+        }
+
         try {
             // 1. 构建未认证的 Token 对象
             UsernamePasswordAuthenticationToken authToken =
@@ -48,6 +65,12 @@ public class UserController {
             // -> 自动使用 BCrypt 比对密码
             // -> 成功则返回完整的 Authentication 对象，失败则抛异常
             Authentication authentication = authenticationManager.authenticate(authToken);
+
+            // 3. 【成功】清理所有负面状态
+            redisTemplate.delete(failKey);
+            redisTemplate.delete(lockKey);
+
+
             // 注意：此时密码已验证通过，用户一定存在
             User user = userService.getByUsername(loginDTO.getUsername());
             // 4. 提取用户 ID
@@ -57,8 +80,22 @@ public class UserController {
             String token = jwtUtil.generateToken(userIdStr);
             return Result.success(token);
         } catch (Exception e) {
-            // 5. 认证失败处理 (用户名不存在或密码错误)
-            e.printStackTrace();
+            // 4. 【失败】处理计数逻辑
+            Long count = redisTemplate.opsForValue().increment(failKey);
+
+            // 设置计数器的生命周期 (30 分钟内有效)
+            if (count != null && count == 1) {
+                redisTemplate.expire(failKey, 30, TimeUnit.MINUTES);
+            }
+
+            // 达到阈值则锁定
+            if (count != null && count >= 5) {
+                // 锁定 1 分钟，时间到自动删除 Key -> 自动解锁
+                redisTemplate.opsForValue().set(lockKey, "locked", 1, TimeUnit.MINUTES);
+                redisTemplate.delete(failKey); // 可选：重置计数
+                return Result.error(403, "密码错误过多，已锁定 1 分钟");
+            }
+
             return Result.error(401, "用户名或密码错误");
         }
     }
@@ -134,6 +171,8 @@ public class UserController {
             return Result.error("登出失败：" + e.getMessage());
         }
     }
+
+
 
 
 

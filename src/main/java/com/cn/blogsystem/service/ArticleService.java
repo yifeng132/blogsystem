@@ -8,6 +8,8 @@ import com.cn.blogsystem.entity.Article;
 import com.cn.blogsystem.vo.ArticleDetailVO;
 import com.cn.blogsystem.vo.ArticleListVO;
 
+import java.util.List;
+
 public interface ArticleService {
 
     //列表查询（分页 + 筛选）：支持按标题模糊查询,用户ID精准查询,
@@ -28,6 +30,9 @@ public interface ArticleService {
 
     //批量删除
     boolean deleteBatch(Long[] ids);
+
+    //获取热门文章
+    List<ArticleListVO> getHotArticles();
 
 
 

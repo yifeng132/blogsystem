@@ -8,14 +8,12 @@ import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
-
-
-
-
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 
 @MapperScan("com.cn.blogsystem.mapper")
 @SpringBootApplication
+@EnableScheduling // ✅ 必须添加此注解以启用 @Scheduled
 public class BlogsystemApplication {
 
     public static void main(String[] args) {

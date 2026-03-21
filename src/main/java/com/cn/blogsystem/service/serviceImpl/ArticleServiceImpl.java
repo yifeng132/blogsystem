@@ -1,5 +1,6 @@
 package com.cn.blogsystem.service.serviceImpl;
 
+import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -15,6 +16,7 @@ import com.cn.blogsystem.vo.ArticleDetailVO;
 import com.cn.blogsystem.vo.ArticleListVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,7 @@ import org.springframework.util.StringUtils;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -30,6 +33,14 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
     @Autowired
     private ArticleMapper articleMapper;
+
+    @Autowired
+    private RedisTemplate<String, String> redisTemplate;
+
+    // 缓存 Key 常量
+    private static final String HOT_ARTICLES_KEY = "blog:hot:articles";
+    // 缓存过期时间 (例如 10 分钟，避免数据长期不一致)
+    private static final long CACHE_EXPIRE_MINUTES = 2;
 
 
     @Override
@@ -79,14 +90,63 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     }
 
     //获取文章详情
+
     @Override
     public ArticleDetailVO getDetailById(Long id) {
-        Article article = articleMapper.selectById(id);
+        // ✅ 第一步：定义详情缓存 Key
+        String detailKey = "article:detail:" + id;
+
+        // ✅ 第二步：先查 Redis 缓存 (场景一的核心)
+        String json = redisTemplate.opsForValue().get(detailKey);
+
+        if (StringUtils.hasText(json)) {
+            // --- 【新增核心逻辑开始】 ---
+            // 即使命中缓存，也要更新阅读量计数！
+            String viewKey = "article:view:" + id;
+            Long increment = redisTemplate.opsForValue().increment(viewKey);
+
+            // 如果是第一次创建计数 Key，设置过期时间
+            if (increment != null && increment == 1) {
+                redisTemplate.expire(viewKey, 24, TimeUnit.HOURS);
+            }
+
+            // 解析缓存对象
+            ArticleDetailVO vo = JSON.parseObject(json, ArticleDetailVO.class);
+
+            // 计算实时阅读量
+            long realTimeViewCount = vo.getViewCount() + (increment -1);
+            vo.setViewCount(realTimeViewCount);
+
+            return vo;
+            // --- 【新增核心逻辑结束】 ---
+
+        }
+
+        // ✅ 第三步：未命中，查数据库
+        System.out.println("⚠️ 未命中详情缓存，查询数据库 (ID: " + id + ")");
+        Article article = this.getById(id);
         if (article == null) {
             throw new BusinessException("文章不存在");
         }
+
+        // ✅ 第四步：处理阅读量计数 (原有的逻辑保留)
+        String viewKey = "article:view:" + id;
+        Long increment = redisTemplate.opsForValue().increment(viewKey);
+        if (increment != null && increment == 1) {
+            redisTemplate.expire(viewKey, 24, TimeUnit.HOURS);
+        }
+        // 计算实时阅读量展示给用户
+        long currentViewCount = article.getViewCount() + (increment != null ? increment : 0);
+        article.setViewCount(currentViewCount);
+
+        // ✅ 第五步：组装 VO 对象
         ArticleDetailVO vo = new ArticleDetailVO();
         BeanUtils.copyProperties(article, vo);
+
+        // ✅ 第六步：【关键】将详情写入 Redis 缓存 (设置 30 分钟过期)
+        // 这样下次再有人访问这篇文章，就直接走第二步返回了
+        redisTemplate.opsForValue().set(detailKey, JSON.toJSONString(vo), 30, TimeUnit.MINUTES);
+
         return vo;
     }
 
@@ -104,10 +164,13 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         Long currentUserId = getCurrentUserId();
         // 后端自动赋值（核心安全点）
         article.setUserId(currentUserId); // 从Token获取当前登录用户ID
-        article.setViewCount(0); // 新文章浏览量默认0
+        article.setViewCount(0L); // 新文章浏览量默认0
         article.setCreateTime(LocalDateTime.now());
 
         boolean save = this.save(article);
+        if (save == true) {
+            evictHotArticlesCache(); // ✅ 新增文章后清除缓存
+        }
         return save;
     }
 
@@ -142,7 +205,11 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         article.setSummary(articleDTO.getSummary());
         // 不需要 setUserId，也不应该让前端或此处随意修改它
 
-        return this.updateById(article);
+        boolean update = this.updateById(article);
+        if (update == true) {
+            evictHotArticlesCache(); // ✅ 新增文章后清除缓存
+        }
+        return update;
     }
 
 
@@ -163,6 +230,9 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         }
         // 删除
         int delete = articleMapper.deleteById(id);
+        if (delete > 0) {
+            evictHotArticlesCache(); // ✅ 删除文章后清除缓存
+        }
         return delete > 0;
     }
 
@@ -199,10 +269,64 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
         // 5. 校验通过，执行批量删除
         int deleteBatch = articleMapper.deleteBatchIds(ids);
+        if (deleteBatch > 0) {
+            evictHotArticlesCache(); // ✅ 删除文章后清除缓存
+        }
         return deleteBatch > 0;
     }
 
 
+    // 获取热门文章
+    @Override
+    public List<ArticleListVO> getHotArticles() {
+        // 1. 【先查 Redis】
+        String json = redisTemplate.opsForValue().get(HOT_ARTICLES_KEY);
+
+        if (StringUtils.hasText(json)) {
+            System.out.println("✅ 命中热门文章缓存");
+            return JSON.parseArray(json, ArticleListVO.class);
+        }
+
+        // 2. 【未命中，查数据库】
+        System.out.println("⚠️ 未命中缓存，查询数据库 (按阅读量排序)");
+
+        // 使用 MyBatis-Plus 构建查询：按阅读量降序，取前 10 条
+        LambdaQueryWrapper<Article> wrapper = new LambdaQueryWrapper<>();
+        wrapper.orderByDesc(Article::getViewCount) // 核心：按阅读量倒序
+                .orderByDesc(Article::getCreateTime) // 次要：阅读量相同按时间倒序
+                .last("LIMIT 5"); // 限制返回 3 条
+
+        // 执行查询
+        List<Article> articles = this.list(wrapper);
+
+        // ✅ 2. 新增转换逻辑：Entity -> VO
+        List<ArticleListVO> voList = articles.stream().map(article -> {
+            ArticleListVO vo = new ArticleListVO();
+            // 只拷贝需要的字段 (id, title, summary, viewCount 等)，自动忽略 content
+            BeanUtils.copyProperties(article, vo);
+            return vo;
+        }).collect(Collectors.toList());
+
+
+        // 3. 【回写 Redis】
+        if (articles != null && !articles.isEmpty()) {
+            String articlesJson = JSON.toJSONString(voList);
+            // 设置过期时间 10 分钟
+            redisTemplate.opsForValue().set(HOT_ARTICLES_KEY, articlesJson, CACHE_EXPIRE_MINUTES, TimeUnit.MINUTES);
+        } else {
+            // 防穿透：如果数据库也没数据，存一个空列表，过期时间短一点 (5 分钟)
+            redisTemplate.opsForValue().set(HOT_ARTICLES_KEY, "[]", 5, TimeUnit.MINUTES);
+        }
+
+        return voList;
+    }
+
+
+    // ⚠️ 关键：当文章新增、修改、删除时，必须清除缓存，保证数据一致性
+    public void evictHotArticlesCache() {
+        System.out.println("🧹 清除热门文章缓存");
+        redisTemplate.delete(HOT_ARTICLES_KEY);
+    }
 
 
     //获取当前登录用户 ID
@@ -224,92 +348,8 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     }
 
 
-
 }
 
 
 
 
-//第一步：生成 Token (登录时)
-//调用 jwtUtil.generateToken(userId)。
-//内部执行 Jwts.builder().setSubject(userId)...。
-//此时，用户 ID 被写入了 JWT 的 sub 字段。
-//第二步：解析 Token (请求进来时，过滤器中)
-//JwtAuthenticationFilter 拦截请求，解析 Token。
-//执行 claims.getSubject() 取出里面的用户 ID。
-//创建一个 Spring Security 的对象：new UsernamePasswordAuthenticationToken(userId, ...)。
-//关键点：这里把取出的 ID 放到了 Principal 的位置。
-//存入上下文：SecurityContextHolder.getContext().setAuthentication(authToken)。
-//第三步：使用用户信息 (你的当前代码)
-//在 add 方法中。
-//执行 Authentication auth = SecurityContextHolder.getContext().getAuthentication();。
-//执行 auth.getPrincipal()。
-//结果：拿到的就是第一步里塞进去的用户 ID。
-
-
-/**
- * 这行代码是 MyBatis-Plus 中构建动态 SQL 查询条件的经典写法，用于实现"**只有当标题不为空时，才执行模糊查询**"的逻辑。
- * <p>
- * 我们可以将其拆解为三个部分来详细理解：
- * <p>
- * ### 1. 核心方法 `wrapper.like(condition, column, value)`
- * 这是 `LambdaQueryWrapper` 的 `like` 方法重载版本，它接收三个参数：
- * *   **第 1 个参数（条件）**：`StringUtils.hasText(queryDTO.getTitle())`
- * *   **第 2 个参数（列）**：`Article::getTitle`
- * *   **第 3 个参数（值）**：`queryDTO.getTitle()`
- * <p>
- * ### 2. 参数详细解析
- * <p>
- * #### 🔹 第 1 个参数：执行条件
- * ```java
- * StringUtils.hasText(queryDTO.getTitle())
- * ```
- * <p>
- * *   **作用**：这是一个布尔判断（`boolean`）。
- * *   **逻辑**：利用 Spring 的工具类 `StringUtils` 检查 `queryDTO.getTitle()` 是否**有文本内容**（即不为 `null` 且不为空字符串 `""`，也不全是空格）。
- * *   **效果**：
- * *   如果返回 `true`：MyBatis-Plus 会将后面的 `LIKE` 条件拼接到最终的 SQL 语句中。
- * *   如果返回 `false`：MyBatis-Plus 会**忽略**这个条件，不拼接任何 SQL，相当于没写过这行代码。
- * *   **目的**：实现**动态查询**。如果用户没传标题，就不加过滤条件，查出所有数据；如果传了标题，就只查匹配的。
- * <p>
- * #### 🔹 第 2 个参数：数据库字段（Lambda 表达式）
- * ```java
- * Article::getTitle
- * ```
- * <p>
- * *   **作用**：这是一个方法引用（Method Reference），指向实体类的 `getTitle` 方法。
- * *   **优势**：
- * *   **类型安全**：编译器会检查 `getTitle` 是否存在，如果字段名写错（比如改成 `getTtle`），编译直接报错，而不是等到运行时报错。
- * *   **自动映射**：MyBatis-Plus 会自动解析这个方法，找到对应的数据库列名（通常是 [title](file://D:\Java\idea2025.2\IntelliJ%20IDEA%202025.2\code\blogsystem\src\main\java\com\cn\blogsystem\entity\Article.java#L12-L12)，如果配置了驼峰转换或表注解，会自动适配）。避免了手动写字符串 `"title"` 可能出现的拼写错误。
- * <p>
- * #### 🔹 第 3 个参数：查询值
- * ```java
- * queryDTO.getTitle()
- * ```
- * <p>
- * *   **作用**：这是实际要用来匹配的值。
- * *   **SQL 表现**：MyBatis-Plus 会自动在该值的前后加上 `%` 通配符。
- * *   假设传入值为 `"Java"`。
- * *   生成的 SQL 片段会是：`AND title LIKE '%Java%'`。
- * <p>
- * ### 3. 最终生成的 SQL 示例
- * <p>
- * 假设数据库表名为 `article`：
- * <p>
- * *   **场景 A：用户传了标题 "Spring"**
- * *   条件判断为 `true`。
- * *   生成 SQL：
- * ```sql
- * SELECT ... FROM article WHERE title LIKE '%Spring%'
- * ```
- * <p>
- * <p>
- * *   **场景 B：用户没传标题 (null 或 "")**
- * *   条件判断为 `false`。
- * *   生成 SQL（完全忽略 like 条件）：
- * ```sql
- * SELECT ... FROM article
- * -- 注意：这里没有 WHERE title LIKE ...
- * ```
- *
- **/

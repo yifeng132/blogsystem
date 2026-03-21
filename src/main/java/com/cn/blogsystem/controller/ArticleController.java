@@ -15,6 +15,8 @@ import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 
 @RestController
 @RequestMapping("/article")
@@ -42,6 +44,15 @@ public class ArticleController {
         }
         return Result.success(articleVO);
     }
+
+    //获取热门文章
+    @GetMapping("/hot")
+    @Operation(summary = "获取热门文章", description = "获取阅读量最高的前 10 篇文章")
+    public Result<List<ArticleListVO>> getHotArticles() {
+        List<ArticleListVO> articles = articleService.getHotArticles();
+        return Result.success(articles);
+    }
+
 
 
 

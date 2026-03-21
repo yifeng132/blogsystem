@@ -13,7 +13,7 @@ public class Article {
     private String title;//文章标题
     private String content;//文章内容
     private String summary;//文章摘要
-    private Integer viewCount;//浏览次数
+    private Long viewCount;//浏览次数
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
     private Long userId;//用户id
