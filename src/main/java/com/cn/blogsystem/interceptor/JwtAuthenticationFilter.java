@@ -93,10 +93,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 System.out.println("❌ Token 解析异常：" + e.getMessage());
                 SecurityContextHolder.clearContext();
             }
-        } else {
-            System.out.println("⚠️ 请求头中未找到 Token");
         }
-
         // 4. 继续执行过滤链（无论 Token 是否有效，都让请求继续走后续过滤器/接口）
         filterChain.doFilter(request, response);
     }

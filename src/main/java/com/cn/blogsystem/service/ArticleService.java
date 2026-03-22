@@ -34,6 +34,9 @@ public interface ArticleService {
     //获取热门文章
     List<ArticleListVO> getHotArticles();
 
+    //限流
+    boolean checkRateLimit(String api);
+
 
 
 

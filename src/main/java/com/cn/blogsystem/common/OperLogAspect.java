@@ -4,6 +4,8 @@ package com.cn.blogsystem.common;
 import com.alibaba.fastjson2.JSON;
 import com.cn.blogsystem.entity.SysOperLog;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -15,6 +17,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 
@@ -61,7 +65,22 @@ public class OperLogAspect {
             logEntity.setRequestMethod(request.getMethod());
 
             // 6. 【填数据】把接口收到的参数转成 JSON 字符串存起来（方便看传了什么）
-            logEntity.setRequestParams(JSON.toJSONString(joinPoint.getArgs()));
+            // ✅ 修改为以下安全序列化的逻辑：
+            Object[] args = joinPoint.getArgs();
+            List<Object> safeArgs = new ArrayList<>();
+
+            for (Object arg : args) {
+                // 跳过 Servlet 原生对象，防止序列化报错
+                if (arg instanceof HttpServletRequest ||
+                        arg instanceof HttpServletResponse ||
+                        arg instanceof HttpSession) {
+                    continue;
+                }
+                safeArgs.add(arg);
+            }
+
+// 只序列化安全的参数对象
+            logEntity.setRequestParams(JSON.toJSONString(safeArgs));
 
             // 7. 【填数据】尝试获取当前登录用户信息
             Authentication authentication = SecurityContextHolder.getContext().getAuthentication();

@@ -17,6 +17,7 @@ import com.cn.blogsystem.vo.ArticleListVO;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,9 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
     @Autowired
     private RedisTemplate<String, String> redisTemplate;
+
+    @Autowired
+    private StringRedisTemplate stringRedisTemplate;
 
     // 缓存 Key 常量
     private static final String HOT_ARTICLES_KEY = "blog:hot:articles";
@@ -114,7 +118,7 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
             ArticleDetailVO vo = JSON.parseObject(json, ArticleDetailVO.class);
 
             // 计算实时阅读量
-            long realTimeViewCount = vo.getViewCount() + (increment -1);
+            long realTimeViewCount = vo.getViewCount() + (increment - 1);
             vo.setViewCount(realTimeViewCount);
 
             return vo;
@@ -154,24 +158,46 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
     // 添加文章
     @Override
     public boolean add(ArticleInsertDTO articleDTO) {
-        //从DTO取用户可编辑字段
-        Article article = new Article();
-        article.setTitle(articleDTO.getTitle());
-        article.setContent(articleDTO.getContent());
-        article.setSummary(articleDTO.getSummary());
-
         // --- 新增逻辑开始：获取当前登录用户 ID ---
         Long currentUserId = getCurrentUserId();
-        // 后端自动赋值（核心安全点）
-        article.setUserId(currentUserId); // 从Token获取当前登录用户ID
-        article.setViewCount(0L); // 新文章浏览量默认0
-        article.setCreateTime(LocalDateTime.now());
 
-        boolean save = this.save(article);
-        if (save == true) {
-            evictHotArticlesCache(); // ✅ 新增文章后清除缓存
+        String lockKey = "lock:submitArticle:" + currentUserId;
+
+        Boolean lock = stringRedisTemplate.opsForValue()
+                .setIfAbsent(lockKey, "locked", 3, TimeUnit.SECONDS);
+
+        if (Boolean.FALSE.equals(lock)) {
+            throw new BusinessException("操作过于频繁，请勿重复提交");
         }
-        return save;
+
+
+        try {
+            //从DTO取用户可编辑字段
+            Article article = new Article();
+            article.setTitle(articleDTO.getTitle());
+            article.setContent(articleDTO.getContent());
+            article.setSummary(articleDTO.getSummary());
+
+
+            // 后端自动赋值（核心安全点）
+            article.setUserId(currentUserId); // 从Token获取当前登录用户ID
+            article.setViewCount(0L); // 新文章浏览量默认0
+            article.setCreateTime(LocalDateTime.now());
+
+            boolean save = this.save(article);
+            if (save == true) {
+                evictHotArticlesCache(); // ✅ 新增文章后清除缓存
+            }
+
+
+
+            return save;
+        } finally {
+            // 【关键】删除锁
+            stringRedisTemplate.delete(lockKey);
+        }
+
+
     }
 
 
@@ -185,55 +211,76 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
 
         // 1. 获取当前用户
         Long currentUserId = getCurrentUserId(); // 提取复用逻辑
-
-        // 2. 查询原文章
-        Article oldArticle = this.getById(articleDTO.getId());
-        if (oldArticle == null) {
-            throw new BusinessException("文章不存在");
+        String lockKey = "lock:updateArticle:" + currentUserId;
+        Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 3, TimeUnit.SECONDS);
+        if (Boolean.FALSE.equals(locked)) {
+            throw new BusinessException("请勿重复提交");
         }
 
-        // 3. 【关键】权限校验：必须是作者才能修改
-        if (!oldArticle.getUserId().equals(currentUserId)) {
-            throw new BusinessException("无权修改该文章");
-        }
+        try {
+            // 2. 查询原文章
+            Article oldArticle = this.getById(articleDTO.getId());
+            if (oldArticle == null) {
+                throw new BusinessException("文章不存在");
+            }
 
-        // 4. 构建更新对象 (只设可变字段，不要设 userId, createTime 等)
-        Article article = new Article();
-        article.setId(articleDTO.getId()); // 必须设置 ID
-        article.setTitle(articleDTO.getTitle());
-        article.setContent(articleDTO.getContent());
-        article.setSummary(articleDTO.getSummary());
-        // 不需要 setUserId，也不应该让前端或此处随意修改它
+            // 3. 【关键】权限校验：必须是作者才能修改
+            if (!oldArticle.getUserId().equals(currentUserId)) {
+                throw new BusinessException("无权修改该文章");
+            }
 
-        boolean update = this.updateById(article);
-        if (update == true) {
-            evictHotArticlesCache(); // ✅ 新增文章后清除缓存
+            // 4. 构建更新对象 (只设可变字段，不要设 userId, createTime 等)
+            Article article = new Article();
+            article.setId(articleDTO.getId()); // 必须设置 ID
+            article.setTitle(articleDTO.getTitle());
+            article.setContent(articleDTO.getContent());
+            article.setSummary(articleDTO.getSummary());
+            // 不需要 setUserId，也不应该让前端或此处随意修改它
+
+            boolean update = this.updateById(article);
+            if (update == true) {
+                evictHotArticlesCache(); // ✅ 新增文章后清除缓存
+            }
+
+            return update;
+        } finally {
+            stringRedisTemplate.delete(lockKey);
         }
-        return update;
     }
 
 
+    // 删除文章
     @Override
     public boolean deleteById(Long id) {
         //获取当前登录用户ID
         Long currentUserId = getCurrentUserId();
-
-        //获取文章
-        Article article = articleMapper.selectById(id);
-        if (article == null) {
-            return false;
+        String lockKey = "lock:deleteArticle:" + currentUserId;
+        Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 3, TimeUnit.SECONDS);
+        if (Boolean.FALSE.equals(locked)) {
+            throw new BusinessException("请勿重复提交");
         }
 
-        // 【关键】校验权限：如果不是管理员，且文章作者不是当前用户，则禁止删除
-        if (!article.getUserId().equals(currentUserId)) {
-            throw new BusinessException("无权删除该文章");
+        try {
+            //获取文章
+            Article article = articleMapper.selectById(id);
+            if (article == null) {
+                return false;
+            }
+
+            // 【关键】校验权限：如果不是管理员，且文章作者不是当前用户，则禁止删除
+            if (!article.getUserId().equals(currentUserId)) {
+                throw new BusinessException("无权删除该文章");
+            }
+            // 删除
+            int delete = articleMapper.deleteById(id);
+            if (delete > 0) {
+                evictHotArticlesCache(); // ✅ 删除文章后清除缓存
+            }
+
+            return delete > 0;
+        } finally {
+            stringRedisTemplate.delete(lockKey);
         }
-        // 删除
-        int delete = articleMapper.deleteById(id);
-        if (delete > 0) {
-            evictHotArticlesCache(); // ✅ 删除文章后清除缓存
-        }
-        return delete > 0;
     }
 
     @Override
@@ -245,34 +292,44 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         // 1. 获取当前登录用户 ID
         Long currentUserId = getCurrentUserId();
 
-        // 2. 将数组转为 List 方便查询
-        List<Long> ids = new ArrayList<>();
-        for (Long id : idss) {
-            ids.add(id);
+        String lockKey = "lock:deleteBatchArticle:" + currentUserId;
+        Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent(lockKey, "locked", 3, TimeUnit.SECONDS);
+        if (Boolean.FALSE.equals(locked)) {
+            throw new BusinessException("请勿重复提交");
         }
 
-        // 3. 【关键】查询这些 ID 对应的文章实体，用于校验权限
-        List<Article> articlesToDelete = this.listByIds(ids);
-
-        // 如果查出来的数量少于传入的数量，说明有 ID 不存在，可根据业务需求决定是否报错
-        if (articlesToDelete.size() != ids.size()) {
-            throw new BusinessException("部分文章不存在");
-        }
-
-        // 4. 【核心安全点】校验每一篇文章是否属于当前用户
-        for (Article article : articlesToDelete) {
-            if (!article.getUserId().equals(currentUserId)) {
-                // 只要有一篇不是当前用户的，就禁止整个批量操作，防止误删或越权
-                throw new BusinessException("无权删除文章 ID: " + article.getId());
+        try {
+            // 2. 将数组转为 List 方便查询
+            List<Long> ids = new ArrayList<>();
+            for (Long id : idss) {
+                ids.add(id);
             }
-        }
 
-        // 5. 校验通过，执行批量删除
-        int deleteBatch = articleMapper.deleteBatchIds(ids);
-        if (deleteBatch > 0) {
-            evictHotArticlesCache(); // ✅ 删除文章后清除缓存
+            // 3. 【关键】查询这些 ID 对应的文章实体，用于校验权限
+            List<Article> articlesToDelete = this.listByIds(ids);
+
+            // 如果查出来的数量少于传入的数量，说明有 ID 不存在，可根据业务需求决定是否报错
+            if (articlesToDelete.size() != ids.size()) {
+                throw new BusinessException("部分文章不存在");
+            }
+
+            // 4. 【核心安全点】校验每一篇文章是否属于当前用户
+            for (Article article : articlesToDelete) {
+                if (!article.getUserId().equals(currentUserId)) {
+                    // 只要有一篇不是当前用户的，就禁止整个批量操作，防止误删或越权
+                    throw new BusinessException("无权删除文章 ID: " + article.getId());
+                }
+            }
+
+            // 5. 校验通过，执行批量删除
+            int deleteBatch = articleMapper.deleteBatchIds(ids);
+            if (deleteBatch > 0) {
+                evictHotArticlesCache(); // ✅ 删除文章后清除缓存
+            }
+            return deleteBatch > 0;
+        } finally {
+            stringRedisTemplate.delete(lockKey);
         }
-        return deleteBatch > 0;
     }
 
 
@@ -319,6 +376,18 @@ public class ArticleServiceImpl extends ServiceImpl<ArticleMapper, Article> impl
         }
 
         return voList;
+    }
+
+    // 三十秒内访问次数不能超过 5 次
+    @Override
+    public boolean checkRateLimit(String api) {
+        Long currentUserId = getCurrentUserId();
+        String key = "limit:api" + api + ":" + currentUserId;
+        Long count = stringRedisTemplate.opsForValue().increment(key, 1);
+        if (count == 1) {
+            stringRedisTemplate.expire(key, 30, TimeUnit.SECONDS);
+        }
+        return count <= 5;
     }
 
 

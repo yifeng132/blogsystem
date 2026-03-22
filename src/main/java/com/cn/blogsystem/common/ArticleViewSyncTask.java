@@ -22,7 +22,7 @@ public class ArticleViewSyncTask {
     private ArticleMapper articleMapper;
 
     /**
-     * 每 5 分钟执行一次同步任务
+     * 每 10 分钟执行一次同步任务
      * Cron 表达式：秒 分 时 日 月 周
      * "0 /5 * * * ?" 表示每 5 分钟执行一次 "
      "*/

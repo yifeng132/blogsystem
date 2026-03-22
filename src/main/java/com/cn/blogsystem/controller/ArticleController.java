@@ -11,11 +11,13 @@ import com.cn.blogsystem.vo.ArticleDetailVO;
 import com.cn.blogsystem.vo.ArticleListVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 
 @RestController
@@ -29,6 +31,10 @@ public class ArticleController {
     @Operation(summary = "列表条件构造，分页查询",description = "根据标题模糊查询,根据用户id精准查询")
     @GetMapping("/list")
     public Result<IPage> list(@RequestBody ArticleQueryDTO  articleDTO) {
+        // 判断是否限流
+        if (!articleService.checkRateLimit("articleList")) {
+            return Result.error("查询失败，您操作过于频繁");
+        }
         IPage<ArticleListVO> page = articleService.pageList(articleDTO);
         return Result.success(page);
     }
@@ -38,6 +44,10 @@ public class ArticleController {
     @Operation(summary = "文章详情", description = "根据 id 查询文章详情")
     @GetMapping("/{id}")
     public Result<ArticleDetailVO> getById(@PathVariable Long id) {
+        // 判断是否限流
+        if (!articleService.checkRateLimit("articleDetail")) {
+            return Result.error("查询失败，您操作过于频繁");
+        }
         ArticleDetailVO articleVO = articleService.getDetailById(id);
         if (articleVO == null) {
             return Result.error("文章不存在");
@@ -49,6 +59,10 @@ public class ArticleController {
     @GetMapping("/hot")
     @Operation(summary = "获取热门文章", description = "获取阅读量最高的前 10 篇文章")
     public Result<List<ArticleListVO>> getHotArticles() {
+        // 判断是否限流
+        if (!articleService.checkRateLimit("hotArticle")) {
+            return Result.error("查询失败，您操作过于频繁");
+        }
         List<ArticleListVO> articles = articleService.getHotArticles();
         return Result.success(articles);
     }
