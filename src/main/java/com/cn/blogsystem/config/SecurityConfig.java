@@ -1,9 +1,11 @@
 package com.cn.blogsystem.config;
 
 import com.cn.blogsystem.interceptor.JwtAuthenticationFilter;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -49,11 +51,27 @@ public class SecurityConfig {
         http
                 // 关闭 CSRF（测试环境简化，生产环境需开启）
                 .csrf(csrf -> csrf.disable())
+                // 开启 CORS，自动使用 CorsConfig 中的 CorsConfigurationSource（桌面测试页面跨域用）
+                .cors(Customizer.withDefaults())
                 .logout(logout -> logout.disable())
                 // 禁用表单登录
                 .formLogin(form -> form.disable())
                 // ✅ 关键：添加 JWT 过滤器，放在用户名密码过滤器之前
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .exceptionHandling(exception -> exception
+                        // 未认证：无token、没有登录凭证，返回401
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            response.setContentType("application/json;charset=utf-8");
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.getWriter().write("{\"code\":401,\"msg\":\"未登录，请提供Token\"}");
+                        })
+                        // 已登录成功，但是权限不足，返回403
+                        .accessDeniedHandler((request, response, accessDeniedException) -> {
+                            response.setContentType("application/json;charset=utf-8");
+                            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                            response.getWriter().write("{\"code\":403,\"msg\":\"权限不足\"}");
+                        })
+                )
                 // 配置接口授权规则
                 .authorizeHttpRequests(auth -> auth
                         // 公开接口：无需登录即可访问

@@ -56,16 +56,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (StringUtils.hasText(token)) {
             try {
                 boolean result = jwtUtil.validateToken(token);
-                if ( result==true){
+                if (result == true) {
                     // 【新增】检查黑名单
                     if (jwtUtil.isTokenInBlacklist(token)) {
+                        // Token黑名单，直接返回401，不要继续走filterChain
+                        response.setContentType("application/json;charset=utf-8");
+                        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED); //401
+                        response.getWriter().write("{\"code\":401,\"msg\":\"Token已失效，请重新登录\"}");
+                        return; //终止，不再往下执行！！
                         // 如果在黑名单中，直接抛出异常或返回 401，阻止后续流程
-                        throw new BusinessException(401, "Token 已失效，请重新登录");
+//                        throw new BusinessException(401, "Token 已失效，请重新登录");
                     }
 
                 }
-
-
 
 
                 // 从载荷中获取用户 ID
@@ -90,10 +93,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     System.out.println("⚠️ Token 解析出的 userId 为 null");
                 }
             } catch (Exception e) {
+                //System.out.println("❌ Token 解析异常：" + e.getMessage());
+                //SecurityContextHolder.clearContext();
+
                 System.out.println("❌ Token 解析异常：" + e.getMessage());
                 SecurityContextHolder.clearContext();
+                // 直接返回401
+                response.setContentType("application/json;charset=utf-8");
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.getWriter().write("{\"code\":401,\"msg\":\"Token无效\"}");
+                return;
             }
         }
+
         // 4. 继续执行过滤链（无论 Token 是否有效，都让请求继续走后续过滤器/接口）
         filterChain.doFilter(request, response);
     }

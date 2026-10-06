@@ -18,7 +18,7 @@ public class JwtUtil {
     private static final String BLACKLIST_PREFIX = "jwt:blacklist:";
 
     private final String SECRET = "EDd+otk8cNR6iAV5M5el0oUMGNCrDe+CwQbDDwExg4g="; // 实际项目中请使用复杂且安全的密钥
-    private final long EXPIRATION = 1000 * 60 * 60 * 24; // 令牌有效期24小时
+    private final long EXPIRATION = 1000 * 60 * 60 * 24 * 24; // 令牌有效期24小时
 
     // 生成JWT令牌
     public String generateToken(String userId) {

@@ -30,7 +30,7 @@ public class ArticleController {
     //列表查询（分页 + 条件筛选）：支持按标题、内容、摘要模糊查询
     @Operation(summary = "列表条件构造，分页查询",description = "根据标题模糊查询,根据用户id精准查询")
     @GetMapping("/list")
-    public Result<IPage> list(@RequestBody ArticleQueryDTO  articleDTO) {
+    public Result<IPage> list(ArticleQueryDTO  articleDTO) {
         // 判断是否限流
         if (!articleService.checkRateLimit("articleList")) {
             return Result.error("查询失败，您操作过于频繁");

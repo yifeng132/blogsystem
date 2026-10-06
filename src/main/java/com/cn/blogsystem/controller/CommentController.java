@@ -25,7 +25,7 @@ public class CommentController {
 
     //根据文章 ID 查询所有评论
     @Operation(summary = "根据文章ID查询所有评论", description = "根据文章ID查询所有评论")
-    @GetMapping("/list")
+    @PostMapping("/list")
     public Result<IPage> list(@RequestBody CommentQueryDTO commentDTO) {
         IPage<CommentSelectVO> page = commentService.listByArticleId(commentDTO);
         return Result.success(page);

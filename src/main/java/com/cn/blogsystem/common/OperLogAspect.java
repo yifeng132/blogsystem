@@ -37,7 +37,7 @@ public class OperLogAspect {
 
     // 【定义切入点】这里写规则，决定哪些方法需要被记录日志
     // 意思是：拦截 com.cn.blogsystem.controller 包下所有类的所有方法
-    @Pointcut("execution(* com.cn.blogsystem.controller..*.*(..))")
+    @Pointcut("execution(* com.cn.blogsystem.controller..*.*(..)) && !execution(* com.cn.blogsystem.controller.UserController.login(..))")
     public void pointcut() {}
 
     // 【环绕通知】这是核心逻辑，像是一个“保镖”，包裹着目标方法执行
@@ -84,18 +84,28 @@ public class OperLogAspect {
 
             // 7. 【填数据】尝试获取当前登录用户信息
             Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-            if (authentication != null && authentication.isAuthenticated()) {
+            // 注意：匿名访问时 Spring Security 放的是 AnonymousAuthenticationToken，
+            // 它 isAuthenticated() 也返回 true、principal 是字符串 "anonymousUser"，
+            // 必须显式排除，否则下面 Long.parseLong("anonymousUser") 会抛 NumberFormatException，
+            // 而且该异常发生在 proceed() 之前，会导致 /login、/register 直接 500。
+            if (authentication != null && authentication.isAuthenticated()
+                    && !"anonymousUser".equals(authentication.getPrincipal())) {
                 Object principal = authentication.getPrincipal();
                 // 如果你的 Principal 是 String 类型的 userId
                 if (principal instanceof String userIdStr) {
-                    logEntity.setUserId(Long.parseLong(userIdStr));
-                    logEntity.setUsername("user_" + userIdStr);
+                    // 防御：只有纯数字才是登录用户 ID
+                    if (userIdStr.matches("\\d+")) {
+                        logEntity.setUserId(Long.parseLong(userIdStr));
+                        logEntity.setUsername("user_" + userIdStr);
+                    } else {
+                        logEntity.setUsername(userIdStr);
+                    }
                 } else {
                     // 如果是其他类型（比如 UserDetails），就取用户名
                     logEntity.setUsername(principal.toString());
                 }
             } else {
-                // 如果没登录，就记为匿名
+                // 如果没登录（含匿名用户 anonymousUser），就记为匿名
                 logEntity.setUsername("anonymous");
             }
 
